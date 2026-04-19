@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Iterable, List
 
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 import pandas as pd
 
 
@@ -194,11 +195,14 @@ def save_tables_to_excel(tables: dict, output_path: Path) -> None:
 
 
 def build_basic_bar_chart(df: pd.DataFrame, x_col: str, y_col: str, title: str, xlabel: str, ylabel: str, path: Path, rotate=False) -> None:
-    plt.figure(figsize=(9, 5))
-    plt.bar(df[x_col].astype(str), df[y_col])
-    plt.title(title)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
+    _, ax = plt.subplots(figsize=(9, 5))
+    ax.bar(df[x_col].astype(str), df[y_col])
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if "Количество" in ylabel or "Частота" in ylabel:
+        ax.set_ylim(bottom=0)
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True, min_n_ticks=1))
     if rotate:
         plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
@@ -206,11 +210,14 @@ def build_basic_bar_chart(df: pd.DataFrame, x_col: str, y_col: str, title: str, 
     plt.close()
 
 
-def build_grouped_bar_from_pivot(pivot_df: pd.DataFrame, title: str, xlabel: str, ylabel: str, path: Path) -> None:
+def build_grouped_bar_from_pivot(pivot_df: pd.DataFrame, title: str, xlabel: str, ylabel: str, path: Path, integer_y_axis: bool = False) -> None:
     ax = pivot_df.plot(kind="bar", figsize=(10, 6))
     ax.set_title(title)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
+    if integer_y_axis:
+        ax.set_ylim(bottom=0)
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True, min_n_ticks=1))
     plt.xticks(rotation=0)
     plt.tight_layout()
     plt.savefig(path)
@@ -389,7 +396,8 @@ def main():
             "Распределение формата занятий по платформам",
             "Платформа",
             "Количество",
-            charts_dir / "platform_mode_distribution.png"
+            charts_dir / "platform_mode_distribution.png",
+            integer_y_axis=True
         )
 
         print("Готово.")
