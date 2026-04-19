@@ -1,8 +1,8 @@
 import re
+import shutil
 from collections import Counter
 from pathlib import Path
 from typing import Iterable, List
-import shutil
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -12,6 +12,20 @@ def read_data() -> pd.DataFrame:
     current_dir = Path(__file__).parent
     file_path = current_dir / "Образ репититора.xlsx"
     return pd.read_excel(file_path)
+
+
+def prepare_output_paths(base_dir: Path) -> tuple[Path, Path]:
+    excel_path = base_dir / "content_analysis_report.xlsx"
+    charts_dir = base_dir / "charts"
+
+    if excel_path.exists():
+        excel_path.unlink()
+
+    if charts_dir.exists():
+        shutil.rmtree(charts_dir)
+
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    return excel_path, charts_dir
 
 
 def compute_numeric_summary(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
@@ -46,6 +60,48 @@ def group_by_median(df: pd.DataFrame, group_col: str, value_col: str) -> pd.Data
     )
     result.columns = [group_col, f"Медианное значение: {value_col}"]
     return result
+
+
+def crosstab_median(df: pd.DataFrame, row_col: str, col_col: str, value_col: str) -> pd.DataFrame:
+    result = pd.pivot_table(
+        df,
+        values=value_col,
+        index=row_col,
+        columns=col_col,
+        aggfunc="median"
+    ).round(2)
+    return result
+
+
+def crosstab_mean(df: pd.DataFrame, row_col: str, col_col: str, value_col: str) -> pd.DataFrame:
+    result = pd.pivot_table(
+        df,
+        values=value_col,
+        index=row_col,
+        columns=col_col,
+        aggfunc="mean"
+    ).round(2)
+    return result
+
+
+def add_age_groups(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["Возрастная группа"] = pd.cut(
+        df["Возраст"],
+        bins=[0, 25, 35, 45, 55, 100],
+        labels=["до 25", "26–35", "36–45", "46–55", "56+"]
+    )
+    return df
+
+
+def add_experience_groups(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["Группа стажа"] = pd.cut(
+        df["Стаж"],
+        bins=[0, 3, 7, 15, 100],
+        labels=["1–3", "4–7", "8–15", "16+"]
+    )
+    return df
 
 
 def tokenize_russian(texts: Iterable[str]) -> List[str]:
@@ -83,91 +139,81 @@ def compute_top_words(df: pd.DataFrame, text_cols: List[str], top_n: int = 20) -
 
     tokens = tokenize_russian(combined_texts)
     counter = Counter(tokens)
-
     top_words = counter.most_common(top_n)
+
     return pd.DataFrame(top_words, columns=["Слово", "Частота"])
 
 
-def prepare_output_paths(base_dir: Path) -> tuple[Path, Path]:
-    excel_path = base_dir / "content_analysis_report.xlsx"
-    charts_dir = base_dir / "charts"
+def compute_content_categories(df: pd.DataFrame) -> pd.DataFrame:
+    category_dict = {
+        "Квалификация и образование": [
+            "окончил", "университет", "мгу", "мфти", "спбгу",
+            "кандидат", "магистрант", "диплом", "образование"
+        ],
+        "Опыт": [
+            "опыт", "стаж", "лет"
+        ],
+        "Достижения": [
+            "олимпиад", "победитель", "призер", "всероссийских", "награда"
+        ],
+        "Экзамены": [
+            "егэ", "огэ", "экзамен"
+        ],
+        "Индивидуальный подход": [
+            "личный", "индивидуальный", "адаптация", "программе"
+        ],
+        "Маркетинговые ходы": [
+            "бесплатно", "первое", "занятие"
+        ],
+        "Онлайн-формат": [
+            "онлайн", "дистанционно"
+        ],
+        "Профессиональное развитие": [
+            "сертификаты", "повышении", "квалификации"
+        ]
+    }
 
-    if excel_path.exists():
-        excel_path.unlink()
+    text = (
+        df["Достижения"].fillna("").astype(str) + " " +
+        df["Особенности работы"].fillna("").astype(str)
+    ).str.lower()
 
-    if charts_dir.exists():
-        shutil.rmtree(charts_dir)
+    rows = []
+    for category, keywords in category_dict.items():
+        count = text.apply(lambda x: any(word in x for word in keywords)).sum()
+        rows.append({"Категория": category, "Количество упоминаний": int(count)})
 
-    charts_dir.mkdir(parents=True, exist_ok=True)
+    result = pd.DataFrame(rows).sort_values("Количество упоминаний", ascending=False)
+    return result
 
-    return excel_path, charts_dir
 
-
-def save_tables_to_excel(
-    numeric_summary: pd.DataFrame,
-    platform_counts: pd.DataFrame,
-    gender_counts: pd.DataFrame,
-    status_counts: pd.DataFrame,
-    mode_counts: pd.DataFrame,
-    mean_gender: pd.DataFrame,
-    mean_platform: pd.DataFrame,
-    mean_mode: pd.DataFrame,
-    median_gender: pd.DataFrame,
-    median_platform: pd.DataFrame,
-    median_mode: pd.DataFrame,
-    top_words: pd.DataFrame,
-    output_path: Path
-) -> None:
+def save_tables_to_excel(tables: dict, output_path: Path) -> None:
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        numeric_summary.to_excel(writer, sheet_name="Статистика")
-        platform_counts.to_excel(writer, sheet_name="Платформы", index=False)
-        gender_counts.to_excel(writer, sheet_name="Пол", index=False)
-        status_counts.to_excel(writer, sheet_name="Соц статус", index=False)
-        mode_counts.to_excel(writer, sheet_name="Формат", index=False)
-        mean_gender.to_excel(writer, sheet_name="Среднее по полу", index=False)
-        mean_platform.to_excel(writer, sheet_name="Среднее по платформе", index=False)
-        mean_mode.to_excel(writer, sheet_name="Среднее по формату", index=False)
-        median_gender.to_excel(writer, sheet_name="Медиана по полу", index=False)
-        median_platform.to_excel(writer, sheet_name="Медиана по платформе", index=False)
-        median_mode.to_excel(writer, sheet_name="Медиана по формату", index=False)
-        top_words.to_excel(writer, sheet_name="Топ слов", index=False)
+        for sheet_name, table in tables.items():
+            table.to_excel(writer, sheet_name=sheet_name[:31], index=True if table.index.name else False)
 
 
-def build_charts(
-    platform_counts: pd.DataFrame,
-    median_platform: pd.DataFrame,
-    top_words: pd.DataFrame,
-    output_dir: Path
-) -> None:
-    plt.figure(figsize=(8, 5))
-    plt.bar(platform_counts["Платформа"], platform_counts["Количество"])
-    plt.title("Количество репетиторов по платформам")
-    plt.xlabel("Платформа")
-    plt.ylabel("Количество")
+def build_basic_bar_chart(df: pd.DataFrame, x_col: str, y_col: str, title: str, xlabel: str, ylabel: str, path: Path, rotate=False) -> None:
+    plt.figure(figsize=(9, 5))
+    plt.bar(df[x_col].astype(str), df[y_col])
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    if rotate:
+        plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
-    plt.savefig(output_dir / "platform_counts.png")
+    plt.savefig(path)
     plt.close()
 
-    plt.figure(figsize=(8, 5))
-    plt.bar(
-        median_platform["Платформа"],
-        median_platform["Медианное значение: Стоимость часа"]
-    )
-    plt.title("Медианная стоимость часа по платформам")
-    plt.xlabel("Платформа")
-    plt.ylabel("Стоимость часа")
-    plt.tight_layout()
-    plt.savefig(output_dir / "median_price_by_platform.png")
-    plt.close()
 
-    plt.figure(figsize=(10, 6))
-    plt.bar(top_words["Слово"], top_words["Частота"])
-    plt.title("Топ слов в текстовых полях")
-    plt.xlabel("Слово")
-    plt.ylabel("Частота")
-    plt.xticks(rotation=45, ha="right")
+def build_grouped_bar_from_pivot(pivot_df: pd.DataFrame, title: str, xlabel: str, ylabel: str, path: Path) -> None:
+    ax = pivot_df.plot(kind="bar", figsize=(10, 6))
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    plt.xticks(rotation=0)
     plt.tight_layout()
-    plt.savefig(output_dir / "top_words.png")
+    plt.savefig(path)
     plt.close()
 
 
@@ -176,7 +222,13 @@ def main():
         print("Скрипт запустился")
 
         df = read_data()
+        df = add_age_groups(df)
+        df = add_experience_groups(df)
+
         print("Файл прочитан")
+
+        current_dir = Path(__file__).parent
+        excel_path, charts_dir = prepare_output_paths(current_dir)
 
         numeric_cols = ['Возраст', 'Стаж', 'Оценка', 'Количество отзывов', 'Стоимость часа']
         text_cols = ['Достижения', 'Особенности работы']
@@ -185,43 +237,159 @@ def main():
 
         platform_counts = compute_frequency_counts(df, 'Платформа')
         gender_counts = compute_frequency_counts(df, 'Пол')
-        status_counts = compute_frequency_counts(df, 'Социальный статус')
         mode_counts = compute_frequency_counts(df, 'Офлайн / онлайн')
 
-        mean_gender = group_by_mean(df, 'Пол', 'Стоимость часа')
-        mean_platform = group_by_mean(df, 'Платформа', 'Стоимость часа')
-        mean_mode = group_by_mean(df, 'Офлайн / онлайн', 'Стоимость часа')
-
-        median_gender = group_by_median(df, 'Пол', 'Стоимость часа')
         median_platform = group_by_median(df, 'Платформа', 'Стоимость часа')
+        median_gender = group_by_median(df, 'Пол', 'Стоимость часа')
         median_mode = group_by_median(df, 'Офлайн / онлайн', 'Стоимость часа')
+        median_age_group = group_by_median(df, 'Возрастная группа', 'Стоимость часа')
+        median_experience_group = group_by_median(df, 'Группа стажа', 'Стоимость часа')
+
+        mean_rating_by_platform = group_by_mean(df, 'Платформа', 'Оценка')
+        mean_reviews_by_platform = group_by_mean(df, 'Платформа', 'Количество отзывов')
+
+        gender_platform_price = crosstab_median(df, 'Пол', 'Платформа', 'Стоимость часа')
+        mode_platform_price = crosstab_median(df, 'Офлайн / онлайн', 'Платформа', 'Стоимость часа')
+        gender_mode_price = crosstab_median(df, 'Пол', 'Офлайн / онлайн', 'Стоимость часа')
+        platform_mode_distribution = pd.crosstab(df['Платформа'], df['Офлайн / онлайн'])
 
         top_words = compute_top_words(df, text_cols)
+        content_categories = compute_content_categories(df)
 
-        current_dir = Path(__file__).parent
-        excel_path, charts_dir = prepare_output_paths(current_dir)
+        tables = {
+            "Статистика": numeric_summary,
+            "Платформы": platform_counts,
+            "Пол": gender_counts,
+            "Формат": mode_counts,
+            "Медиана_платформа": median_platform,
+            "Медиана_пол": median_gender,
+            "Медиана_формат": median_mode,
+            "Медиана_возраст": median_age_group,
+            "Медиана_стаж": median_experience_group,
+            "Рейтинг_платформа": mean_rating_by_platform,
+            "Отзывы_платформа": mean_reviews_by_platform,
+            "Пол_Платформа_Цена": gender_platform_price,
+            "Формат_Платформа_Цена": mode_platform_price,
+            "Пол_Формат_Цена": gender_mode_price,
+            "Платформа_Формат_частоты": platform_mode_distribution,
+            "Топ_слов": top_words,
+            "Категории_контента": content_categories
+        }
 
-        save_tables_to_excel(
-            numeric_summary=numeric_summary,
-            platform_counts=platform_counts,
-            gender_counts=gender_counts,
-            status_counts=status_counts,
-            mode_counts=mode_counts,
-            mean_gender=mean_gender,
-            mean_platform=mean_platform,
-            mean_mode=mean_mode,
-            median_gender=median_gender,
-            median_platform=median_platform,
-            median_mode=median_mode,
-            top_words=top_words,
-            output_path=excel_path
+        save_tables_to_excel(tables, excel_path)
+
+        build_basic_bar_chart(
+            platform_counts,
+            "Платформа",
+            "Количество",
+            "Количество репетиторов по платформам",
+            "Платформа",
+            "Количество",
+            charts_dir / "platform_counts.png"
         )
 
-        build_charts(
-            platform_counts=platform_counts,
-            median_platform=median_platform,
-            top_words=top_words,
-            output_dir=charts_dir
+        build_basic_bar_chart(
+            median_platform,
+            "Платформа",
+            "Медианное значение: Стоимость часа",
+            "Медианная стоимость часа по платформам",
+            "Платформа",
+            "Стоимость часа",
+            charts_dir / "median_price_by_platform.png"
+        )
+
+        build_basic_bar_chart(
+            median_gender,
+            "Пол",
+            "Медианное значение: Стоимость часа",
+            "Медианная стоимость часа по полу",
+            "Пол",
+            "Стоимость часа",
+            charts_dir / "median_price_by_gender.png"
+        )
+
+        build_basic_bar_chart(
+            median_mode,
+            "Офлайн / онлайн",
+            "Медианное значение: Стоимость часа",
+            "Медианная стоимость часа по формату занятий",
+            "Формат занятий",
+            "Стоимость часа",
+            charts_dir / "median_price_by_mode.png"
+        )
+
+        build_basic_bar_chart(
+            median_age_group,
+            "Возрастная группа",
+            "Медианное значение: Стоимость часа",
+            "Медианная стоимость часа по возрастным группам",
+            "Возрастная группа",
+            "Стоимость часа",
+            charts_dir / "median_price_by_age_group.png"
+        )
+
+        build_basic_bar_chart(
+            median_experience_group,
+            "Группа стажа",
+            "Медианное значение: Стоимость часа",
+            "Медианная стоимость часа по группам стажа",
+            "Группа стажа",
+            "Стоимость часа",
+            charts_dir / "median_price_by_experience_group.png"
+        )
+
+        build_basic_bar_chart(
+            top_words,
+            "Слово",
+            "Частота",
+            "Топ слов в текстовых полях",
+            "Слово",
+            "Частота",
+            charts_dir / "top_words.png",
+            rotate=True
+        )
+
+        build_basic_bar_chart(
+            content_categories,
+            "Категория",
+            "Количество упоминаний",
+            "Категории самопрезентации репетиторов",
+            "Категория",
+            "Количество упоминаний",
+            charts_dir / "content_categories.png",
+            rotate=True
+        )
+
+        build_grouped_bar_from_pivot(
+            gender_platform_price,
+            "Медианная стоимость часа: пол × платформа",
+            "Пол",
+            "Стоимость часа",
+            charts_dir / "gender_platform_price.png"
+        )
+
+        build_grouped_bar_from_pivot(
+            mode_platform_price,
+            "Медианная стоимость часа: формат × платформа",
+            "Формат занятий",
+            "Стоимость часа",
+            charts_dir / "mode_platform_price.png"
+        )
+
+        build_grouped_bar_from_pivot(
+            gender_mode_price,
+            "Медианная стоимость часа: пол × формат занятий",
+            "Пол",
+            "Стоимость часа",
+            charts_dir / "gender_mode_price.png"
+        )
+
+        build_grouped_bar_from_pivot(
+            platform_mode_distribution,
+            "Распределение формата занятий по платформам",
+            "Платформа",
+            "Количество",
+            charts_dir / "platform_mode_distribution.png"
         )
 
         print("Готово.")
